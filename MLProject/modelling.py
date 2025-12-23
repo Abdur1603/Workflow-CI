@@ -1,55 +1,75 @@
 import pandas as pd
 import numpy as np
-import mlflow
-import mlflow.sklearn
-import os
+import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+import mlflow
+import mlflow.sklearn
+import dagshub
+import os
+import shutil
+matplotlib.use('Agg')
 
-def load_data(data_path):
-    X_train = pd.read_csv(os.path.join(data_path, "X_train.csv"))
-    X_test = pd.read_csv(os.path.join(data_path, "X_test.csv"))
-    y_train = pd.read_csv(os.path.join(data_path, "y_train.csv")).values.ravel()
-    y_test = pd.read_csv(os.path.join(data_path, "y_test.csv")).values.ravel()
-    return X_train, X_test, y_train, y_test
+REPO_OWNER = "Abdur1603"
+REPO_NAME = "Eksperimen_SML"
 
-def train():
-    data_path = "namadataset_preprocessing" 
-    X_train, X_test, y_train, y_test = load_data(data_path)
+def main():
 
-    mlflow.set_experiment("CI_Experiment")
-
-    rf = RandomForestClassifier(random_state=42)
-    param_grid = {'n_estimators': [50], 'max_depth': [5]}
-
-    print("Starting Grid Search...")
-    grid_search = GridSearchCV(estimator=rf, param_grid=param_grid, cv=2)
-    grid_search.fit(X_train, y_train)
+    token = os.getenv("DAGSHUB_TOKEN")
+    if token:
+        try:
+            dagshub.auth.add_app_token(token)
+        except Exception:
+            pass
     
-    best_model = grid_search.best_estimator_
-    best_params = grid_search.best_params_
+    dagshub.init(repo_owner=REPO_OWNER, repo_name=REPO_NAME, mlflow=True)
+    mlflow.set_tracking_uri(f"https://dagshub.com/{REPO_OWNER}/{REPO_NAME}.mlflow")
+    mlflow.set_experiment("Telco_Churn_Docker_Build")
 
-    with mlflow.start_run():
-        mlflow.log_params(best_params)
+    try:
+        df = pd.read_csv('telco_customer_churn_preprocessing/telco_churn_clean.csv')
+    except FileNotFoundError:
+        print("CRITICAL: Dataset not found.")
+        exit(1)
+
+    X = df.drop('Churn', axis=1)
+    y = df['Churn']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    with mlflow.start_run() as run:
+        run_id = run.info.run_id
+        print(f"--> Run ID: {run_id}")
+
+        model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+
+        mlflow.log_metric("accuracy", accuracy_score(y_test, y_pred))
         
-        y_pred = best_model.predict(X_test)
-        acc = accuracy_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred)
-        
-        mlflow.log_metric("accuracy", acc)
-        mlflow.log_metric("f1_score", f1)
-        
-        mlflow.sklearn.log_model(best_model, "model")
-        print(f"Model Trained. Accuracy: {acc}")
-        
-        plt.figure()
-        sns.heatmap(confusion_matrix(y_test, y_pred), annot=True)
+        plt.figure(figsize=(6,5))
+        sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d')
+        plt.title('Confusion Matrix')
         plt.savefig("confusion_matrix.png")
-        mlflow.log_artifact("confusion_matrix.png")
         plt.close()
+        mlflow.log_artifact("confusion_matrix.png")
+
+        print("Uploading model to DagsHub (Online Backup)...")
+        mlflow.sklearn.log_model(model, "model")
+
+        local_model_path = "model_output"
+        
+        if os.path.exists(local_model_path):
+            shutil.rmtree(local_model_path)
+            
+        print(f"Saving model locally to '{local_model_path}' for Docker Build...")
+        mlflow.sklearn.save_model(model, local_model_path)
+        print("Local save success.")
+
+        with open("last_run_id.txt", "w") as f:
+            f.write(run_id)
 
 if __name__ == "__main__":
-    train()
+    main()
