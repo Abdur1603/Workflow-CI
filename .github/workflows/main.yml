@@ -71,20 +71,19 @@ jobs:
         MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
       run: |
         echo "Checking local model folder..."
-        ls -R MLProject/model_output
-        
         if [ ! -d "MLProject/model_output" ]; then
           echo "FATAL ERROR: Folder model lokal tidak ditemukan!"
           exit 1
         fi
         
-        echo "Building Docker Image directly from local folder..."
-        
         mlflow models build-docker \
           -m "./MLProject/model_output" \
           -n "${{ secrets.DOCKER_USERNAME }}/telco-churn-model:latest" \
           --enable-mlserver
+          
+        docker tag ${{ secrets.DOCKER_USERNAME }}/telco-churn-model:latest ${{ secrets.DOCKER_USERNAME }}/telco-churn-model:${{ github.sha }}
 
     - name: Push Docker Image
       run: |
         docker push ${{ secrets.DOCKER_USERNAME }}/telco-churn-model:latest
+        docker push ${{ secrets.DOCKER_USERNAME }}/telco-churn-model:${{ github.sha }}
