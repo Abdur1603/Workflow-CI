@@ -60,8 +60,7 @@ jobs:
       run: |
         mlflow models build-docker \
           -m "./MLProject/model_output" \
-          -n "${{ secrets.DOCKER_USERNAME }}/telco-churn-model:latest" \
-          --enable-mlserver
+          -n "${{ secrets.DOCKER_USERNAME }}/telco-churn-model:latest"
 
         docker tag ${{ secrets.DOCKER_USERNAME }}/telco-churn-model:latest ${{ secrets.DOCKER_USERNAME }}/telco-churn-model:${{ github.sha }}
 
