@@ -1,0 +1,14 @@
+name: telco-churn-env
+channels:
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - pip:
+    - pandas
+    - numpy
+    - scikit-learn
+    - mlflow
+    - matplotlib
+    - seaborn
+    - dagshub
