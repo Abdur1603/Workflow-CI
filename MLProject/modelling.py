@@ -1,148 +1,68 @@
 import pandas as pd
-import numpy as np
+import os
+import shutil
+import mlflow
+import mlflow.sklearn
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
 import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
-import mlflow
-import mlflow.sklearn
-import dagshub
-import os
-import shutil
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    confusion_matrix,
-)
+from sklearn.metrics import confusion_matrix
 
-matplotlib.use("Agg")
-
-REPO_OWNER = "Abdur1603"
-REPO_NAME = "Eksperimen_SML"
-
+matplotlib.use('Agg')
 
 def load_data(data_path):
     print("Loading data...")
-    try:
-        X_train = pd.read_csv(os.path.join(data_path, "X_train.csv"))
-        X_test = pd.read_csv(os.path.join(data_path, "X_test.csv"))
-        y_train = pd.read_csv(os.path.join(data_path, "y_train.csv")).values.ravel()
-        y_test = pd.read_csv(os.path.join(data_path, "y_test.csv")).values.ravel()
-        return X_train, X_test, y_train, y_test
-    except FileNotFoundError:
-        print("Error: File dataset tidak ditemukan di path yang ditentukan.")
-        return None, None, None, None
+    X_train = pd.read_csv(os.path.join(data_path, "X_train.csv"))
+    X_test = pd.read_csv(os.path.join(data_path, "X_test.csv"))
+    y_train = pd.read_csv(os.path.join(data_path, "y_train.csv")).values.ravel()
+    y_test = pd.read_csv(os.path.join(data_path, "y_test.csv")).values.ravel()
+    return X_train, X_test, y_train, y_test
 
+def train_and_save(X_train, X_test, y_train, y_test):
+    print("Training Model...")
+    rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
+    rf.fit(X_train, y_train)
+
+    y_pred = rf.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    print(f"Accuracy: {acc:.4f}")
+
+    plt.figure(figsize=(6,5))
+    sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d', cmap='Blues')
+    plt.title(f'Confusion Matrix (Acc: {acc:.2f})')
+    plt.savefig("confusion_matrix.png")
+    plt.close()
+    mlflow.log_artifact("confusion_matrix.png")
+    if os.path.exists("confusion_matrix.png"): os.remove("confusion_matrix.png")
+
+    local_path = "model_output"
+    if os.path.exists(local_path):
+        shutil.rmtree(local_path)
+    
+    print(f"Saving model locally to '{local_path}' for Docker...")
+    mlflow.sklearn.save_model(rf, local_path)
+    print("Model saved successfully.")
+
+    mlflow.sklearn.log_model(rf, "model")
 
 def main():
-    token = os.getenv("DAGSHUB_TOKEN")
-    if token:
-        try:
-            dagshub.auth.add_app_token(token)
-        except Exception:
-            pass
-
-    dagshub.init(repo_owner=REPO_OWNER, repo_name=REPO_NAME, mlflow=True)
-
-    if mlflow.active_run():
-        print("Running via 'mlflow run'. Using existing Active Run.")
-    else:
-        print("Running manually. Setting up new experiment.")
-        mlflow.set_tracking_uri(f"https://dagshub.com/{REPO_OWNER}/{REPO_NAME}.mlflow")
-        mlflow.set_experiment("Telco_Churn_Docker_Build")
+    mlflow.sklearn.autolog()
 
     data_folder = "telco_customer_churn_preprocessing"
     if not os.path.exists(data_folder):
         data_folder = "."
 
     X_train, X_test, y_train, y_test = load_data(data_folder)
-    if X_train is None:
-        exit(1)
 
-    print("Starting Hyperparameter Tuning...")
-    rf = RandomForestClassifier(random_state=42)
-    param_grid = {
-        "n_estimators": [50, 100],
-        "max_depth": [5, 10],
-        "min_samples_split": [2, 5],
-    }
-
-    grid_search = GridSearchCV(
-        estimator=rf, param_grid=param_grid, cv=3, verbose=1, n_jobs=-1
-    )
-    grid_search.fit(X_train, y_train)
-
-    best_model = grid_search.best_estimator_
-    best_params = grid_search.best_params_
-    print(f"Best Params found: {best_params}")
-
-    y_pred = best_model.predict(X_test)
-
-    acc = accuracy_score(y_test, y_pred)
-    prec = precision_score(y_test, y_pred)
-    rec = recall_score(y_test, y_pred)
-    f1 = f1_score(y_test, y_pred)
-
-    run_context = (
-        mlflow.start_run()
-        if mlflow.active_run()
-        else mlflow.start_run(run_name="RandomForest_Tuned_CI")
-    )
-
-    with run_context as run:
-        run_id = run.info.run_id
-        print(f"--> Run ID: {run_id}")
-
-        mlflow.log_params(best_params)
-        mlflow.log_param("model_type", "Random Forest (Tuned)")
-        mlflow.log_metric("accuracy", acc)
-        mlflow.log_metric("precision", prec)
-        mlflow.log_metric("recall", rec)
-        mlflow.log_metric("f1_score", f1)
-
-        print(f"Metrics Logged -> Acc: {acc:.4f}, F1: {f1:.4f}")
-
-        plt.figure(figsize=(6, 5))
-        sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt="d", cmap="Blues")
-        plt.title(f"Confusion Matrix (Acc: {acc:.2f})")
-        plt.ylabel("Actual")
-        plt.xlabel("Predicted")
-        plt.tight_layout()
-        plt.savefig("confusion_matrix.png")
-        plt.close()
-        mlflow.log_artifact("confusion_matrix.png")
-
-        if hasattr(best_model, "feature_importances_"):
-            plt.figure(figsize=(10, 6))
-            importances = best_model.feature_importances_
-            indices = np.argsort(importances)[::-1]
-            features = X_train.columns
-            plt.title("Feature Importances")
-            plt.bar(range(X_train.shape[1]), importances[indices], align="center")
-            plt.xticks(range(X_train.shape[1]), features[indices], rotation=90)
-            plt.tight_layout()
-            plt.savefig("feature_importance.png")
-            plt.close()
-            mlflow.log_artifact("feature_importance.png")
-
-        print("Uploading model to DagsHub...")
-        mlflow.sklearn.log_model(best_model, "model")
-
-        local_model_path = "model_output"
-        if os.path.exists(local_model_path):
-            shutil.rmtree(local_model_path)
-
-        print(f"Saving model locally to '{local_model_path}' for Docker Build...")
-        mlflow.sklearn.save_model(best_model, local_model_path)
-        print("Local save success.")
-
-    for f in ["confusion_matrix.png", "feature_importance.png"]:
-        if os.path.exists(f):
-            os.remove(f)
-
+    if mlflow.active_run():
+        print("Active Run detected (CI/CD environment). Using existing run.")
+        train_and_save(X_train, X_test, y_train, y_test)
+    else:
+        print("No Active Run detected (Local environment). Starting new run.")
+        with mlflow.start_run(run_name="Manual_Run"):
+            train_and_save(X_train, X_test, y_train, y_test)
 
 if __name__ == "__main__":
     main()
